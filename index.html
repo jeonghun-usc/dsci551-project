@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Music Trend Analytics</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; background: #0f0f0f; color: #eee; }
+    header { background: #1a1a2e; padding: 20px 40px; border-bottom: 2px solid #e94560; }
+    header h1 { font-size: 24px; color: #e94560; }
+    header p { font-size: 13px; color: #aaa; margin-top: 4px; }
+    nav { display: flex; gap: 10px; padding: 16px 40px; background: #16213e; }
+    nav button {
+      padding: 8px 20px; border: none; border-radius: 20px;
+      background: #0f3460; color: #eee; cursor: pointer; font-size: 14px;
+    }
+    nav button.active { background: #e94560; color: white; }
+    .tab { display: none; padding: 30px 40px; }
+    .tab.active { display: block; }
+    .card {
+      background: #1a1a2e; border-radius: 10px;
+      padding: 24px; margin-bottom: 24px;
+    }
+    .card h2 { font-size: 16px; color: #e94560; margin-bottom: 6px; }
+    .card p { font-size: 12px; color: #888; margin-bottom: 16px; }
+    canvas { max-height: 350px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Music Trend Analytics Dashboard</h1>
+  <p>Powered by DuckDB — columnar storage & vectorized execution</p>
+</header>
+
+<nav>
+  <button class="active" onclick="showTab('audio')">Audio Features</button>
+  <button onclick="showTab('genre')">Genre Popularity</button>
+  <button onclick="showTab('artists')">Top Artists</button>
+  <button onclick="showTab('duration')">Duration & Loudness</button>
+</nav>
+
+<!-- Tab 1: Audio Features -->
+<div id="audio" class="tab active">
+  <div class="card">
+    <h2>Average Energy & Danceability by Genre</h2>
+    <p>DuckDB scans only the energy, danceability, and track_genre columns — skipping all others. Results computed via vectorized HashAggregate.</p>
+    <canvas id="audioChart"></canvas>
+  </div>
+</div>
+
+<!-- Tab 2: Genre Popularity -->
+<div id="genre" class="tab">
+  <div class="card">
+    <h2>Genre Popularity Rankings</h2>
+    <p>Single-pass columnar scan over popularity and track_genre. DuckDB processes values in batches of 2,048 using SIMD instructions.</p>
+    <canvas id="genreChart"></canvas>
+  </div>
+</div>
+
+<!-- Tab 3: Top Artists -->
+<div id="artists" class="tab">
+  <div class="card">
+    <h2>Top 20 Artists by Popularity</h2>
+    <p>Two-key HashAggregate on artists and track_genre columns. Only 3 of 21 columns read from disk.</p>
+    <canvas id="artistsChart"></canvas>
+  </div>
+</div>
+
+<!-- Tab 4: Duration & Loudness -->
+<div id="duration" class="tab">
+  <div class="card">
+    <h2>Average Duration & Loudness by Genre</h2>
+    <p>DuckDB reads only duration_ms and loudness columns — roughly 14% of total data. Vectorized float arithmetic across all row groups.</p>
+    <canvas id="durationChart"></canvas>
+  </div>
+</div>
+
+<script>
+  function showTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    document.getElementById(name).classList.add('active');
+    event.target.classList.add('active');
+  }
+
+  const COLORS = [
+    '#e94560','#0f3460','#533483','#e94560','#2ec4b6',
+    '#ff9f1c','#cbf3f0','#ffbf69','#ffffff','#a8dadc'
+  ];
+
+  // Tab 1: Audio Features
+  fetch('/api/audio-trends')
+    .then(r => r.json())
+    .then(data => {
+      const top = data.slice(0, 15);
+      new Chart(document.getElementById('audioChart'), {
+        type: 'bar',
+        data: {
+          labels: top.map(d => d.track_genre),
+          datasets: [
+            {
+              label: 'Avg Energy',
+              data: top.map(d => d.avg_energy),
+              backgroundColor: '#e94560'
+            },
+            {
+              label: 'Avg Danceability',
+              data: top.map(d => d.avg_danceability),
+              backgroundColor: '#2ec4b6'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { labels: { color: '#eee' } } },
+          scales: {
+            x: { ticks: { color: '#aaa' }, grid: { color: '#333' } },
+            y: { ticks: { color: '#aaa' }, grid: { color: '#333' }, min: 0, max: 1 }
+          }
+        }
+      });
+    });
+
+  // Tab 2: Genre Popularity
+  fetch('/api/genre-popularity')
+    .then(r => r.json())
+    .then(data => {
+      const top = data.slice(0, 15);
+      new Chart(document.getElementById('genreChart'), {
+        type: 'bar',
+        data: {
+          labels: top.map(d => d.track_genre),
+          datasets: [{
+            label: 'Avg Popularity',
+            data: top.map(d => d.avg_popularity),
+            backgroundColor: top.map((_, i) => COLORS[i % COLORS.length])
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#aaa' }, grid: { color: '#333' } },
+            y: { ticks: { color: '#aaa' }, grid: { color: '#333' } }
+          }
+        }
+      });
+    });
+
+  // Tab 3: Top Artists
+  fetch('/api/top-artists')
+    .then(r => r.json())
+    .then(data => {
+      new Chart(document.getElementById('artistsChart'), {
+        type: 'bar',
+        data: {
+          labels: data.map(d => d.artists),
+          datasets: [{
+            label: 'Avg Popularity',
+            data: data.map(d => d.avg_popularity),
+            backgroundColor: '#533483'
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#aaa' }, grid: { color: '#333' } },
+            y: { ticks: { color: '#aaa', font: { size: 11 } }, grid: { color: '#333' } }
+          }
+        }
+      });
+    });
+
+  // Tab 4: Duration & Loudness
+  fetch('/api/duration-loudness')
+    .then(r => r.json())
+    .then(data => {
+      const top = data.slice(0, 15);
+      new Chart(document.getElementById('durationChart'), {
+        type: 'bar',
+        data: {
+          labels: top.map(d => d.track_genre),
+          datasets: [
+            {
+              label: 'Avg Duration (sec)',
+              data: top.map(d => d.avg_duration_sec),
+              backgroundColor: '#ff9f1c',
+              yAxisID: 'y'
+            },
+            {
+              label: 'Avg Loudness (dB)',
+              data: top.map(d => Math.abs(d.avg_loudness)),
+              backgroundColor: '#e94560',
+              yAxisID: 'y2'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { labels: { color: '#eee' } } },
+          scales: {
+            x: { ticks: { color: '#aaa' }, grid: { color: '#333' } },
+            y: { ticks: { color: '#aaa' }, grid: { color: '#333' }, position: 'left' },
+            y2: { ticks: { color: '#aaa' }, grid: { display: false }, position: 'right' }
+          }
+        }
+      });
+    });
+</script>
+
+</body>
+</html>
